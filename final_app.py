@@ -18,7 +18,7 @@ model_id = "./smollm2_pubmed_full_v3"
 
 print("Loading tokenizer...")
 tokenizer = AutoTokenizer.from_pretrained(model_id)
-tokenizer.pad_token = tokenizer.eos_token  # Important for some models
+tokenizer.pad_token = tokenizer.eos_token
 
 print("Loading model...")
 model = AutoModelForCausalLM.from_pretrained(
@@ -28,12 +28,7 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 
 # ============================================
-# 🔧 Create streamer for real-time output
-# ============================================
-streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, timeout=10.0)
-
-# ============================================
-# 🔧 Optimized pipeline with streaming support
+# 🔧 Optimized pipeline
 # ============================================
 print("Creating pipeline...")
 pipe = pipeline(
@@ -41,75 +36,120 @@ pipe = pipeline(
     model=model,
     tokenizer=tokenizer,
     device=-1,
-    max_new_tokens=80,
-    temperature=0.3,
-    top_p=0.85,
+    max_new_tokens=250,  # Increased to 250 tokens
+    temperature=0.7,
+    top_p=0.9,
     do_sample=True,
-    repetition_penalty=1.2,
+    repetition_penalty=1.2,  # Stronger repetition penalty
     pad_token_id=tokenizer.eos_token_id,
 )
 
 llm = HuggingFacePipeline(pipeline=pipe)
 
 # ============================================
-# 🔍 Search tool
+# 🔍 Tools
 # ============================================
-search = DuckDuckGoSearchRun()
+search_tool = DuckDuckGoSearchRun()
 search_cache = {}
 
 # ============================================
-# 🎯 Improved prompt engineering
+# 🛠️ Agent Tool System
 # ============================================
-def create_smart_prompt(query, context=""):
-    """Create optimized prompts that prevent repetition"""
+def should_use_search(query):
+    """Determine if search tool should be used"""
+    search_keywords = {
+        "latest", "recent", "new", "current", "today", "now", "update", 
+        "research", "study", "findings", "discovery", "breakthrough",
+        "news", "trending", "2024", "2025", "statistics", "data"
+    }
+    return any(keyword in query.lower() for keyword in search_keywords)
+
+def use_search_tool(query):
+    """Use search tool and return context"""
+    print("🛠️ Using: DuckDuckGo Search")
+    try:
+        search_start = time.time()
+        results = search_tool.run(query)
+        print(f"✅ Search completed in {time.time() - search_start:.1f}s")
+        return results[:1000] if len(results) > 1000 else results
+    except Exception as e:
+        print(f"❌ Search failed: {e}")
+        return ""
+
+# ============================================
+# 🎯 Optimized Prompts for SmolLM2
+# ============================================
+def create_agent_prompt(query, search_context=""):
+    """Create prompts that work well with SmolLM2"""
     
-    if context:
-        return f"""Based on the research context below, provide a clear summary:
+    if search_context:
+        return f"""<|system|>
+You are a helpful AI assistant. Use the provided search context to answer the question thoroughly and accurately.
 
-Research Context: {context}
+SEARCH CONTEXT:
+{search_context}
 
-Question: {query}
+QUESTION:
+{query}
 
-Answer concisely and directly:"""
+INSTRUCTIONS:
+- Provide a comprehensive, detailed answer based on the search context
+- Structure your response with clear paragraphs
+- Include key facts, findings, and relevant information
+- Avoid repetition and stay focused on the question
+- Write in clear, natural English
+</|system|>
+<|user|>
+{query}
+</|user|>
+<|assistant|>"""
     
     else:
-        return f"""Provide a clear, direct answer to this question:
+        return f"""<|system|>
+You are a helpful AI assistant. Answer the question thoroughly and accurately.
 
-Question: {query}
+QUESTION:
+{query}
 
-Answer:"""
+INSTRUCTIONS:
+- Provide a comprehensive, detailed answer
+- Structure your response with clear paragraphs  
+- Include key facts and relevant information
+- Avoid repetition and stay focused on the question
+- Write in clear, natural English
+- Aim for about 200-250 words
+</|system|>
+<|user|>
+{query}
+</|user|>
+<|assistant|>"""
 
 # ============================================
-# 🔄 Streaming generation function
+# 🔄 Streaming Generation
 # ============================================
-def generate_with_streaming(prompt, use_streaming=True):
-    """
-    Generate text with optional streaming
-    """
-    if not use_streaming:
-        # Fallback to non-streaming
-        response = llm.invoke(prompt)
-        return response if isinstance(response, str) else response[0]['generated_text']
+def generate_with_streaming(prompt):
+    """Generate text with streaming output"""
+    streamer = TextIteratorStreamer(tokenizer, skip_prompt=True, timeout=30.0)
     
-    # Streaming generation
     generation_kwargs = {
-        "max_new_tokens": 80,
-        "temperature": 0.3,
-        "top_p": 0.85,
+        "max_new_tokens": 250,
+        "temperature": 0.7,
+        "top_p": 0.9,
         "do_sample": True,
         "repetition_penalty": 1.2,
         "streamer": streamer,
     }
     
-    # Start generation in a separate thread
+    # Start generation in separate thread
+    inputs = tokenizer(prompt, return_tensors="pt")
     thread = Thread(target=model.generate, kwargs={
         **generation_kwargs,
-        **tokenizer(prompt, return_tensors="pt")
+        **inputs
     })
     thread.daemon = True
     thread.start()
     
-    # Collect streamed text
+    # Stream output
     generated_text = ""
     print("💡 Answer: ", end="", flush=True)
     
@@ -118,208 +158,125 @@ def generate_with_streaming(prompt, use_streaming=True):
         generated_text += new_text
     
     thread.join()
+    print()  # New line after streaming
     return generated_text
 
 # ============================================
-# ⚡ Optimized medical agent with streaming
+# 🤖 Intelligent Agent
 # ============================================
-def medical_agent_optimized(query, use_streaming=True):
+def intelligent_agent(query, use_streaming=True):
     """
-    Optimized version with streaming support
+    Main agent that decides when to use tools and generates responses
     """
     start_time = time.time()
     
-    # Complexity check
-    complex_keywords = {"latest", "research", "study", "clinical", "recent", "new", "findings"}
-    is_complex = any(keyword in query.lower() for keyword in complex_keywords)
-
-    context_summary = ""
-    if is_complex:
-        cache_key = query.lower()[:50]
+    print(f"\n{'='*70}")
+    print(f"🤖 AGENT PROCESSING: {query}")
+    print('='*70)
+    
+    # Step 1: Tool Selection
+    search_context = ""
+    if should_use_search(query):
+        cache_key = query.lower()[:100]
         if cache_key in search_cache:
-            context_summary = search_cache[cache_key]
-            print("📚 Using cached search")
+            search_context = search_cache[cache_key]
+            print("📚 Using cached search results")
         else:
-            try:
-                print("🔍 Searching...", end=" ", flush=True)
-                search_start = time.time()
-                search_results = search.run(query)
-                context_summary = search_results[:350] if len(search_results) > 350 else search_results
-                search_cache[cache_key] = context_summary
-                print(f"✅ ({time.time() - search_start:.1f}s)")
-            except Exception as e:
-                print(f"❌ Search failed")
-                context_summary = ""
-
-    # Use optimized prompt
-    prompt = create_smart_prompt(query, context_summary if is_complex else "")
+            search_context = use_search_tool(query)
+            if search_context:
+                search_cache[cache_key] = search_context
     
-    print(f"\n{'='*60}")
-    print(f"❓ Question: {query}")
+    # Step 2: Create appropriate prompt
+    prompt = create_agent_prompt(query, search_context)
     
+    # Step 3: Generate response
+    print("🚀 Generating response...")
     gen_start = time.time()
+    
     try:
         if use_streaming:
-            response_text = generate_with_streaming(prompt, use_streaming=True)
-            print()  # New line after streaming
+            response_text = generate_with_streaming(prompt)
         else:
-            print("💡 Generating...", end=" ", flush=True)
-            response_text = generate_with_streaming(prompt, use_streaming=False)
-            print(f"✅ ({time.time() - gen_start:.1f}s)")
+            response = llm.invoke(prompt)
+            response_text = response if isinstance(response, str) else response[0]['generated_text']
             print(f"💡 Answer: {response_text}")
         
-        # Advanced cleaning
-        cleaned_text = clean_response(response_text, prompt, query)
+        # Step 4: Clean response
+        cleaned_text = clean_agent_response(response_text)
         
-        if not use_streaming:
-            print(f"💡 Answer: {cleaned_text}")
+        total_time = time.time() - start_time
+        print(f"\n✅ Agent completed in {total_time:.1f}s")
+        print('='*70)
+        
+        return cleaned_text
         
     except Exception as e:
-        print(f"❌ Error: {str(e)}")
-        cleaned_text = "I apologize, but I encountered an error generating a response."
+        print(f"❌ Generation error: {e}")
+        return f"I apologize, but I encountered an error: {str(e)}"
 
-    total_time = time.time() - start_time
-    print(f"\n⏱️  Total time: {total_time:.1f}s")
-    print("="*60)
-    
-    return cleaned_text
-
-def clean_response(response_text, prompt, original_query):
-    """Advanced response cleaning to remove repetitions and artifacts"""
-    
-    # Remove the prompt from response
-    if prompt in response_text:
-        response_text = response_text.replace(prompt, "")
-    
-    # Remove repeated questions
-    if original_query.lower() in response_text.lower():
-        # Find where the answer actually starts
-        query_pos = response_text.lower().find(original_query.lower())
-        if query_pos > 0:
-            response_text = response_text[query_pos + len(original_query):]
-    
-    # Remove common artifacts and repetitions
-    cleaning_patterns = [
-        "Question:",
-        "Answer:",
-        "Context:",
-        "Based on the research context",
-        "Provide a clear summary",
-        "Answer concisely and directly",
-        "The present study aimed to",
-        "The objective was to",
-        "The study population was",
-        "The participants were",
-        "The results showed that",
-        "The study was approved by",
+def clean_agent_response(response_text):
+    """Clean agent response while preserving content"""
+    # Remove system prompts and artifacts
+    artifacts = [
+        "<|system|>", "</|system|>", 
+        "<|user|>", "</|user|>", 
+        "<|assistant|>", "</|assistant|>",
+        "INSTRUCTIONS:", "QUESTION:", "SEARCH CONTEXT:",
+        "Provide a comprehensive, detailed answer",
+        "Avoid repetition and stay focused",
+        "Write in clear, natural English"
     ]
     
-    for pattern in cleaning_patterns:
-        response_text = response_text.replace(pattern, "")
+    for artifact in artifacts:
+        response_text = response_text.replace(artifact, "")
     
-    # Split into sentences and remove duplicates
-    sentences = [s.strip() for s in response_text.split('.') if s.strip()]
-    unique_sentences = []
-    seen_sentences = set()
+    # Basic cleanup
+    response_text = ' '.join(response_text.split())
+    response_text = response_text.strip()
     
-    for sentence in sentences:
-        # Simple deduplication based on first few words
-        key = ' '.join(sentence.split()[:6]).lower()
-        if key not in seen_sentences and len(sentence) > 10:
-            unique_sentences.append(sentence)
-            seen_sentences.add(key)
-    
-    cleaned_text = '. '.join(unique_sentences[:4])  # Limit to 4 sentences
-    cleaned_text = cleaned_text.strip()
-    
-    # Final cleanup
-    cleaned_text = ' '.join(cleaned_text.split())
-    
-    if not cleaned_text or len(cleaned_text) < 10:
-        return "I couldn't generate a proper response. Please try rephrasing your question."
-    
-    return cleaned_text
+    return response_text
 
 # ============================================
-# 🔄 Simple streaming alternative (if above doesn't work)
+# 🔁 Agent Loop with Continuous Interaction
 # ============================================
-def simple_streaming_generation(query, use_streaming=True):
-    """
-    Alternative simpler streaming approach
-    """
-    prompt = create_smart_prompt(query)
+def run_agent_loop():
+    """Run continuous agent interaction loop"""
+    print("🚀 Starting Intelligent Agent System...")
+    print("🔧 Available Tools: DuckDuckGo Search")
+    print("💬 Type 'quit' or 'exit' to end the session")
+    print("="*70)
     
-    if not use_streaming:
-        response = llm.invoke(prompt)
-        response_text = response if isinstance(response, str) else response[0]['generated_text']
-        return clean_response(response_text, prompt, query)
-    
-    # Simulated streaming (character by character)
-    print("💡 Answer: ", end="", flush=True)
-    response = llm.invoke(prompt)
-    response_text = response if isinstance(response, str) else response[0]['generated_text']
-    cleaned_text = clean_response(response_text, prompt, query)
-    
-    # Print with streaming effect
-    for char in cleaned_text:
-        print(char, end="", flush=True)
-        time.sleep(0.02)  # Adjust speed here
-    print()
-    
-    return cleaned_text
+    while True:
+        try:
+            user_input = input("\n🎯 Your question: ").strip()
+            
+            if user_input.lower() in ['quit', 'exit', 'bye']:
+                print("👋 Thank you for using the agent system. Goodbye!")
+                break
+                
+            if not user_input:
+                continue
+                
+            # Process with agent
+            start_time = time.time()
+            response = intelligent_agent(user_input, use_streaming=True)
+            
+            # Show token count
+            token_count = len(tokenizer.encode(response))
+            print(f"📊 Response tokens: {token_count}")
+            
+        except KeyboardInterrupt:
+            print("\n👋 Session interrupted. Goodbye!")
+            break
+        except Exception as e:
+            print(f"❌ System error: {e}")
+            continue
 
 # ============================================
-# 🚀 Main execution with streaming options
+# 🚀 Main Execution
 # ============================================
 if __name__ == "__main__":
-    print("🚀 Starting OPTIMIZED medical assistant with STREAMING...")
-    print("💬 Choose mode:")
-    print("1. Real streaming (if supported)")
-    print("2. Simulated streaming (always works)")
+    print("🤖 Intelligent Agent System Initialized!")
     
-    mode = 2  # Change to 1 for real streaming, 2 for simulated
-    
-    # Test questions
-    test_questions = [
-        "What is the function of insulin in the human body?",
-        "What are the latest research findings on insulin pumps?",
-        "Why is exercise important for mental health?"
-    ]
-    
-    for i, question in enumerate(test_questions, 1):
-        print(f"\n🧪 Test {i}/{len(test_questions)}")
-        
-        if mode == 1:
-            # Try real streaming
-            try:
-                medical_agent_optimized(question, use_streaming=True)
-            except Exception as e:
-                print(f"Real streaming failed, falling back to simulated: {e}")
-                medical_agent_optimized(question, use_streaming=False)
-        else:
-            # Use simulated streaming
-            print(f"\n{'='*60}")
-            print(f"❓ Question: {question}")
-            start_time = time.time()
-            
-            # Complexity check for search
-            complex_keywords = {"latest", "research", "study", "clinical", "recent", "new", "findings"}
-            is_complex = any(keyword in question.lower() for keyword in complex_keywords)
-            
-            if is_complex:
-                try:
-                    print("🔍 Searching...", end=" ", flush=True)
-                    search_start = time.time()
-                    search_results = search.run(question)
-                    context_summary = search_results[:350] if len(search_results) > 350 else search_results
-                    print(f"✅ ({time.time() - search_start:.1f}s)")
-                except:
-                    print("❌ Search failed")
-                    context_summary = ""
-            
-            # Use simulated streaming
-            response = simple_streaming_generation(question, use_streaming=True)
-            
-            total_time = time.time() - start_time
-            print(f"⏱️  Total time: {total_time:.1f}s")
-            print("="*60)
+    # Start chat loop directly
+    run_agent_loop()
