@@ -35,7 +35,18 @@ pipe = pipeline(
 )
 
 # ---- 5️⃣ Example usage ----
-question = "What is the function of insulin in the human body?"
-instruction = f"### Instruction:\nAnswer the following medical question:\n{question}\n\n### Response:"
-result = pipe(instruction)[0]["generated_text"]
+question = "What is the insulin?"
+instruction = (
+    f"### Instruction:\n"
+    f"You are a medical assistant. Provide a short and clear answer.\n"
+    f"Answer the following medical question:\n{question}\n\n### Response:"
+)
+
+result = pipe(
+    instruction,
+    max_new_tokens=200,     # force output beyond prompt
+    num_return_sequences=1,
+    pad_token_id=tokenizer.eos_token_id
+)[0]["generated_text"]
+
 print(result)
