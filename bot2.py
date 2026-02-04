@@ -1,4 +1,4 @@
-def add_numbers(a, b):
+def add_two_numbers(a, b):
     """Return the sum of two numbers.
 
     Args:
@@ -6,6 +6,6 @@ def add_numbers(a, b):
         b (int or float): Second number.
 
     Returns:
-        int or float: The sum of a and b.
+        int or float: The sum of `a` and `b`.
     """
     return a + b
