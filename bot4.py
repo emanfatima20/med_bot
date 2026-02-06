@@ -1,4 +1,6 @@
-def sum_numbers(a, b):
+# bot4.py
+
+def sum_two_numbers(a, b):
     """Return the sum of two numbers.
 
     Args:
@@ -6,6 +8,6 @@ def sum_numbers(a, b):
         b (int or float): Second number.
 
     Returns:
-        int or float: The sum of a and b.
+        int or float: The sum of `a` and `b`.
     """
     return a + b
